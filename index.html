@@ -261,6 +261,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
     </div>
     <div class="section-header">Data</div>
     <div class="danger-btn" onclick="confirmReset()">Reset all data</div>
+    <div onclick="exportToCSV()" style="margin:0 16px 12px;padding:14px;border-radius:14px;background:rgba(52,199,89,.1);color:var(--green);font-size:15px;font-weight:500;text-align:center;cursor:pointer">⬇️ &nbsp;Export data to Excel (CSV)</div>
     <div style="height:20px"></div>
   </div>
   <div class="tabbar" id="tabbar-info"></div>
@@ -551,6 +552,8 @@ function renderSession(){
         const prev=getLog(currentDate,currentDayId,ex.id,si);
         const prevSessions=getExHistory(ex.id);
         const lastLog=prevSessions.length>0?prevSessions[0].sets.find(s=>s.setNum===si):null;
+        const prefillWeight=prev?prev.weight:(lastLog?lastLog.weight:'');
+        const prefillReps=prev?prev.reps:'';
         html+=`<div class="set-row">
           <div class="set-label">S${si}</div>
           <div class="set-input-wrap">
@@ -558,12 +561,12 @@ function renderSession(){
               <div class="input-group">
                 <div class="input-label">Weight ${unitLabel()}</div>
                 <input class="set-input" type="number" inputmode="decimal" step="${suggestInc()}" min="0" placeholder="—"
-                  id="i_${ex.id}_${si}_w" value="${prev?prev.weight:(tgt.weight||'')}">
+                  id="i_${ex.id}_${si}_w" value="${prefillWeight}">
               </div>
               <div class="input-group">
                 <div class="input-label">Reps done</div>
                 <input class="set-input" type="number" inputmode="numeric" min="0" placeholder="—"
-                  id="i_${ex.id}_${si}_r" value="${prev?prev.reps:''}">
+                  id="i_${ex.id}_${si}_r" value="${prefillReps}">
               </div>
             </div>
             ${lastLog?`<div class="prev-hint">Last: ${lastLog.weight}${unitLabel()} × ${lastLog.reps} reps</div>`:''}
@@ -936,6 +939,58 @@ function renderProgress(){
   });
   if(!html)html=`<div class="empty-state"><h3>No data yet</h3><p>Log some sessions and your progress will appear here.</p></div>`;
   el.innerHTML=html;
+}
+
+// ═══════════════════════ EXPORT ═══════════════════════
+function exportToCSV(){
+  const s=gs();
+  const rows=[];
+  rows.push(['WORKOUT LOG']);
+  rows.push(['Date','Day type','Exercise','Set','Weight','Unit','Reps','Bonus set','Notes']);
+  const sessionData={};
+  Object.keys(s.logs).forEach(k=>{
+    if(k.startsWith('note_')||k.startsWith('rest_')||k.startsWith('pushstart_'))return;
+    const parts=k.split('_');
+    if(parts.length<4)return;
+    const date=parts[0];const dayId=parts[1];const exId=parts[2];const setStr=parts[3];
+    const log=s.logs[k];
+    if(!log||typeof log!=='object'||(!log.weight&&!log.reps))return;
+    const key=date+'_'+dayId;
+    if(!sessionData[key])sessionData[key]={date,dayId,exercises:{}};
+    if(!sessionData[key].exercises[exId])sessionData[key].exercises[exId]=[];
+    sessionData[key].exercises[exId].push({setNum:parseInt(setStr.replace('s','')),weight:log.weight,reps:log.reps,name:log.name||getExName(exId),bonus:log.bonus||false});
+  });
+  Object.values(sessionData).sort((a,b)=>a.date.localeCompare(b.date)).forEach(session=>{
+    const day=CYCLE.find(d=>d.id===session.dayId);
+    const dayLabel=day?day.label:session.dayId;
+    const note=getNote(session.date,session.dayId);
+    Object.values(session.exercises).forEach(sets=>{
+      sets.sort((a,b)=>a.setNum-b.setNum).forEach((set,i)=>{
+        rows.push([session.date,dayLabel,set.name,set.setNum,set.weight,s.unit||'kg',set.reps,set.bonus?'Yes':'No',i===0?note:'']);
+      });
+    });
+  });
+  rows.push([]);rows.push(['REST DAYS']);rows.push(['Date']);
+  Object.keys(s.logs).filter(k=>k.startsWith('rest_')).forEach(k=>{rows.push([k.replace('rest_','')]);});
+  rows.push([]);rows.push(['BODY & NUTRITION']);
+  rows.push(['Date','Body weight','Unit','Protein (g)','Carbs (g)','Fat (g)','Total calories','Calorie target']);
+  if(s.body){
+    Object.entries(s.body).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([date,log])=>{
+      if(!log||typeof log!=='object')return;
+      const cals=Math.round((parseFloat(log.protein)||0)*4+(parseFloat(log.carbs)||0)*4+(parseFloat(log.fat)||0)*9);
+      rows.push([date,log.weight||'',s.unit||'kg',log.protein||'',log.carbs||'',log.fat||'',cals||'',s.bodySettings?s.bodySettings.calTarget:'']);
+    });
+  }
+  const csv=rows.map(row=>row.map(cell=>{
+    const str=String(cell===undefined||cell===null?'':cell);
+    return(str.includes(',')||str.includes('"')||str.includes('\n'))?'"'+str.replace(/"/g,'""')+'"':str;
+  }).join(',')).join('\n');
+  const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download='ppal_data_'+todayStr()+'.csv';
+  document.body.appendChild(a);a.click();
+  document.body.removeChild(a);URL.revokeObjectURL(url);
 }
 
 // ═══════════════════════ INIT ═══════════════════════
